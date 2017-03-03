@@ -2,29 +2,32 @@
 import numpy as np
 import pickle as pickle
 import gym
-
+import copy
 # hyperparameters
 H = 200 # number of hidden layer neurons
-batch_size = 200 #
+batch_size = 300 #
 learning_rate = 1e-4
 gamma = 0.99 # discount factor for reward
 decay_rate = 0.99 # decay factor for RMSProp leaky sum of grad^2
+mom_rate = 0.9
 resume = False # resume from previous checkpoint?
 render = False
 
 # model initialization
 D = 80 * 80 # input dimensionality: 80x80 grid
 if resume:
-  model = pickle.load(open('save.ac', 'rb'))
+  model, model_target = pickle.load(open('save.ac', 'rb'))
 else:
   model = {}
   model['W1_policy'] = np.random.randn(H,D) / np.sqrt(D) # "Xavier" initialization
   model['W2_policy'] = np.random.randn(H) / np.sqrt(H)
   model['W1_value'] = np.random.randn(H,D) / np.sqrt(D) # "Xavier" initialization
   model['W2_value'] = np.random.randn(H) / np.sqrt(H)
+  model_target = copy.deepcopy(model)
   
 grad_buffer = { k : np.zeros_like(v) for k,v in model.items() } # update buffers that add up gradients over a batch
 rmsprop_cache = { k : np.zeros_like(v) for k,v in model.items() } # rmsprop memory
+momentum = { k : np.zeros_like(v) for k,v in model.items() }
 
 def sigmoid(x): 
   return 1.0 / (1.0 + np.exp(-x)) # sigmoid "squashing" function to interval [0,1]
@@ -38,7 +41,7 @@ def prepro(I):
   I[I != 0] = 1 # everything else (paddles, ball) just set to 1
   return I.astype(np.float).ravel()
 
-def forward(x,modelType):
+def forward(x,modelType,model=model):
   h = np.dot(model['W1_'+modelType], x)
   h[h<0] = 0 # ReLU nonlinearity
   out = np.dot(model['W2_'+modelType], h)
@@ -57,7 +60,6 @@ def backward(eph,epx,epd,modelType):
 env = gym.make("Pong-v0")
 observation = env.reset()
 prev_x = None # used in computing the difference frame
-v_next,h_v_next=None,None
 xs,h_ps,h_vs,dlogps,dv = [],[],[],[],[]
 running_reward = None
 reward_sum = 0
@@ -74,10 +76,7 @@ while True:
   aprob, h_p = forward(x,'policy')
   action = 2 if np.random.uniform() < aprob else 3 # roll the dice!
 
-  if v_next is None:
-    v,h_v = forward(x,'value') 
-  else:
-    v,h_v = v_next,h_v_next
+  v,h_v = forward(x,'value') 
   # record various intermediates (needed later for backprop)
   xs.append(x) # observation
   h_ps.append(h_p) # hidden state
@@ -89,8 +88,8 @@ while True:
   observation, reward, done, info = env.step(action)
   reward_sum += reward
 
-  v_next,h_v_next=forward(prepro(observation)-prev_x,'value')
-  dv.append(reward+gamma*v_next-v) 
+  v_next,_=forward(prepro(observation)-prev_x,'value',model_target)
+  dv.append(reward+gamma*v_next-v)
 
   if reward != 0: 
     round_number += 1
@@ -104,21 +103,24 @@ while True:
     xs,h_ps,h_vs,dlogps,dv = [],[],[],[],[] # reset array memory
 
 
-    discounted_epv = epv * np.vstack([gamma**i for i in range(len(epv))])
-    epdlogp *= discounted_epv # modulate the gradient with advantage (PG magic happens right here.)
+    #discounted_epv = epv * np.vstack([gamma**i for i in range(len(epv))])
+    epdlogp *= epv # modulate the gradient with advantage (PG magic happens right here.)
     grad_p = backward(eph_p,epx,epdlogp,'policy')
     grad_v = backward(eph_v,epx,epv,'value')
     grad = dict(grad_p,**grad_v)
 
     for k in model: grad_buffer[k] += grad[k] # accumulate grad over batch
 
-    # perform rmsprop parameter update every batch_size
     if round_number % batch_size == 0:
       for k,v in model.items():
         g = grad_buffer[k] # gradient
         rmsprop_cache[k] = decay_rate * rmsprop_cache[k] + (1 - decay_rate) * g**2
-        model[k] += learning_rate * g / (np.sqrt(rmsprop_cache[k]) + 1e-5)
+        momentum[k] = mom_rate * momentum[k] + learning_rate * g / (np.sqrt(rmsprop_cache[k]) + 1e-5)
+        model[k] += momentum[k]
         grad_buffer[k] = np.zeros_like(v) # reset batch gradient buffer
+
+        if 'value' in k:
+          model_target[k] = mom_rate * model_target[k] + (1-mom_rate) * model[k]
 
     print (('round %d game finished, reward: %f' % (round_number, reward)) + ('' if reward == -1 else ' !!!!!!!!'))
 
@@ -129,5 +131,4 @@ while True:
     reward_sum = 0
     observation = env.reset() # reset env
     prev_x = None
-    v_next,h_v_next=None,None
-  if round_number % 2000 == 0: pickle.dump(model, open('save.ac', 'wb'))
+  if round_number % 3000 == 0: pickle.dump((model,model_target), open('save.ac', 'wb'))
