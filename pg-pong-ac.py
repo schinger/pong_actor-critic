@@ -11,7 +11,7 @@ learning_rate = 1e-4
 gamma = 0.99 # discount factor for reward
 decay_rate = 0.99 # decay factor for RMSProp leaky sum of grad^2
 mom_rate = 0.9
-td_step = 100 # initial td step
+td_step = 30 # initial td step
 gamma_power = [gamma**i for i in range(td_step+1)]
 shrink_step = True
 rmsprop = True
@@ -106,7 +106,7 @@ while True:
 
   if reward != 0: 
     round_number += 1
-    if shrink_step and round_number % 2000 == 0:
+    if shrink_step and round_number % 10000 == 0:
       if td_step > 1:
         td_step -= 1
     # calcutate td error
