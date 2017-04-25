@@ -107,7 +107,7 @@ while True:
   if reward != 0: 
     round_number += 1
     if shrink_step and round_number % 10000 == 0:
-      if td_step > 1:
+      if td_step > 15:
         td_step -= 1
     # calcutate td error
     dvs = [0]*len(vs)
