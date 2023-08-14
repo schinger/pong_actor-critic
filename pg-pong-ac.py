@@ -16,7 +16,7 @@ gamma_power = [gamma**i for i in range(td_step+1)]
 shrink_step = True
 rmsprop = True
 resume = False # resume from previous checkpoint?
-render = False
+render = False # show game UI?
 
 
 # model initialization
@@ -37,7 +37,7 @@ else:
   
 grad_buffer = { k : np.zeros_like(v) for k,v in model.items() } # update buffers that add up gradients over a batch
 momentum = { k : np.zeros_like(v) for k,v in model.items() }
-rmsprop_cache = { k : np.zeros_like(v) for k,v in model.iteritems() } # rmsprop memory
+rmsprop_cache = { k : np.zeros_like(v) for k,v in model.items() } # rmsprop memory
 
 def sigmoid(x): 
   return 1.0 / (1.0 + np.exp(-x)) # sigmoid "squashing" function to interval [0,1]
@@ -68,16 +68,17 @@ def backward(eph,epx,epd,modelType):
   db1 = sum(dh)
   dW1 = np.dot(dh.T, epx)
   return {'W1_'+modelType:dW1, 'W2_'+modelType:dW2, 'b1_'+modelType:db1, 'b2_'+modelType:db2}
-
-env = gym.make("Pong-v0")
-observation = env.reset()
+if render:
+  env = gym.make("Pong-v0", render_mode='human')
+else:
+  env = gym.make("Pong-v0")
+observation, _ = env.reset()
 prev_x = None # used in computing the difference frame
 xs,h_ps,h_vs,dlogps,vs,tvs,dvs = [],[],[],[],[],[],[]
 running_reward = None
 reward_sum = 0
 round_number = 0
 while True:
-  if render: env.render()
 
   # preprocess the observation, set input to network to be difference image
   cur_x = prepro(observation)
@@ -100,7 +101,7 @@ while True:
   dlogps.append(y - aprob) # grad that encourages the action that was taken to be taken (see http://cs231n.github.io/neural-networks-2/#losses if confused)
 
   # step the environment and get new measurements
-  observation, reward, done, info = env.step(action)
+  observation, reward, done, info, _ = env.step(action)
   reward_sum += reward
 
 
@@ -126,7 +127,6 @@ while True:
     xs,h_ps,h_vs,dlogps,vs,tvs,dvs = [],[],[],[],[],[],[] # reset array memory
 
 
-    #discounted_epv = epv * np.vstack([gamma**i for i in range(len(epv))])
     epdlogp *= epv # modulate the gradient with advantage (PG magic happens right here.)
     grad_p = backward(eph_p,epx,epdlogp,'policy')
     grad_v = backward(eph_v,epx,epv,'value')
@@ -137,7 +137,7 @@ while True:
     if round_number % batch_size == 0:
       for k,v in model.items():
         g = grad_buffer[k] # gradient
-        if rmsprop:
+        if rmsprop: # since the code is written in 2017, rmsprop is popular that time ^_^.
           rmsprop_cache[k] = decay_rate * rmsprop_cache[k] + (1 - decay_rate) * g**2
           momentum[k] = mom_rate * momentum[k] + learning_rate * g / (np.sqrt(rmsprop_cache[k]) + 1e-5)
         else:
@@ -155,5 +155,5 @@ while True:
     running_reward = reward_sum if running_reward is None else running_reward * 0.99 + reward_sum * 0.01
     print ('resetting env. episode reward total was %f. running mean: %f' % (reward_sum, running_reward))
     reward_sum = 0
-    observation = env.reset() # reset env
+    observation, _ = env.reset() # reset env
     prev_x = None
